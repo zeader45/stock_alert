@@ -81,7 +81,7 @@ def scan_stocks_individual(tickers):
                     "RSI": round(rsi, 2),
                     "Market Cap (B)": round(market_cap / 1e9, 2)
                 })
-            time.sleep(1.5)
+            time.sleep(1)
 
         except Exception as e:
             print(f"⚠️ Error with {ticker}: {e}")
