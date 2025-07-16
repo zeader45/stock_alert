@@ -13,7 +13,7 @@ RSI_PERIOD = 14
 RSI_UPPER = 80
 RSI_LOWER = 20
 MIN_MARKET_CAP = 1e9
-MAX_TICKERS = 1000
+MAX_TICKERS = None
 
 # === Ticker Fetching ===
 def fetch_all_tickers():
@@ -81,17 +81,34 @@ def scan_stocks_individual(tickers):
                     "RSI": round(rsi, 2),
                     "Market Cap (B)": round(market_cap / 1e9, 2)
                 })
-            time.sleep(1)
+            time.sleep(.5)
 
         except Exception as e:
             print(f"⚠️ Error with {ticker}: {e}")
 
     # Output results
-    df = pd.DataFrame(matched)
-    if not df.empty:
-        output_file = "scan_results.csv"
-        df.to_csv(output_file, index=False)
-        print(f"\n✅ Matching stocks saved to {output_file}")
+    if matched:
+        df = pd.DataFrame(matched)
+        df['Type'] = df['RSI'].apply(lambda x: 'Oversold' if x < RSI_LOWER else 'Overbought')
+        oversold = df[df["Type"] == "Oversold"].sort_values("RSI").reset_index(drop=True)
+        overbought = df[df["Type"] == "Overbought"].sort_values("RSI", ascending=False).reset_index(drop=True)
+
+        # Pad to equal length
+        max_len = max(len(oversold), len(overbought))
+        oversold = oversold.reindex(range(max_len))
+        overbought = overbought.reindex(range(max_len))
+
+        # Build combined output with spacer column
+        final = pd.concat([
+            oversold,
+            pd.DataFrame({'': [''] * max_len}),
+            overbought
+        ], axis=1)
+
+        output_file = "scan_results_clean.csv"
+        final.to_csv(output_file, index=False)
+        print(f"\n✅ Formatted results saved to {output_file}")
+        print(final.dropna(how="all").to_string(index=False))
 
         # Send email
         send_email_with_csv(
@@ -100,9 +117,6 @@ def scan_stocks_individual(tickers):
             sender_password="mdej uriw yhiv huhc",
             recipient_email="zeader2012@gmail.com"
         )
-        # df.to_csv("scan_results_individual.csv", index=False)
-        # print("\n✅ Matching stocks saved to scan_results_individual.csv")
-        # print(df.to_string(index=False))
     else:
         print("No matching stocks found.")
 
