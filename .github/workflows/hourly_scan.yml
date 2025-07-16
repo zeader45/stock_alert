@@ -2,8 +2,8 @@ name: Hourly RSI Scanner
 
 on:
   schedule:
-    - cron: '25 10 * * *'  # Runs every hour at minute 0
-  workflow_dispatch:     # Allows manual runs from GitHub UI
+    - cron: '25 10 4,7,10,13,16,19,22,25,28,31 * *'
+  workflow_dispatch:
 
 jobs:
   run-scan:
