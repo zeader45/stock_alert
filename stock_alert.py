@@ -116,7 +116,7 @@ def scan_stocks_individual(tickers):
                 "Signal": signal
             })
 
-            time.sleep(0.5)
+            time.sleep(1)
 
         except Exception as e:
             print(f"⚠️ Error with {ticker}: {e}")
