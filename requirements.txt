@@ -1,5 +1,5 @@
 pandas
-yfinance
+yfinance==0.2.54
 yahoo_fin
 html5lib
 lxml
