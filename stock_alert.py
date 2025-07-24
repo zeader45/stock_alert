@@ -1,4 +1,5 @@
 import time
+
 import pandas as pd
 import yfinance as yf
 import datetime
@@ -9,14 +10,15 @@ import os
 
 # === CONFIG ===
 RSI_PERIOD = 14
-RSI_UPPER = 80
-RSI_LOWER = 20
-MIN_MARKET_CAP = 1e9
+RSI_UPPER = 85
+RSI_LOWER = 15
+MIN_MARKET_CAP = 5e9
 MAX_TICKERS = None
 
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT")
+
 
 # === Ticker Fetching ===
 def fetch_all_tickers():
@@ -34,38 +36,27 @@ def calculate_rsi(prices, period=RSI_PERIOD):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# === IV Estimate ===
-def fetch_iv_estimate(ticker):
-    try:
-        stock = yf.Ticker(ticker)
-        options_dates = stock.options
-        if not options_dates:
-            return None
-        chain = stock.option_chain(options_dates[0])
-        calls_iv = chain.calls['impliedVolatility'].mean()
-        puts_iv = chain.puts['impliedVolatility'].mean()
-        return round((calls_iv + puts_iv) / 2, 4)
-    except:
-        return None
 
-# === Email Dispatch ===
-def send_email_with_csv(filename):
+def send_email_with_csv(filename, sender_email, sender_password, recipient_email):
     msg = EmailMessage()
-    msg['Subject'] = '📈 RSI Scan Results with Trend & IV'
-    msg['From'] = EMAIL_USER
-    msg['To'] = EMAIL_RECIPIENT
+    msg['Subject'] = '📈 RSI Scan Results'
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
     msg.set_content('Attached is the latest RSI scan result.')
 
+    # Attach the file
     with open(filename, 'rb') as f:
-        msg.add_attachment(f.read(), maintype='application', subtype='octet-stream', filename=filename)
+        file_data = f.read()
+        msg.add_attachment(file_data, maintype='application', subtype='octet-stream', filename=filename)
 
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.login(sender_email, sender_password)
             smtp.send_message(msg)
-        print(f"📧 Email sent to {EMAIL_RECIPIENT}")
+        print(f"📧 Email sent to {recipient_email}")
     except Exception as e:
         print(f"⚠️ Email failed: {e}")
+
 
 # === Main Scanner ===
 def scan_stocks_individual(tickers):
@@ -75,74 +66,62 @@ def scan_stocks_individual(tickers):
     for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
-            df = stock.history(period="200d")
-            if df.empty or len(df) < 200:
+
+            # Fetch historical data
+            df = stock.history(period="30d")
+            if df.empty or len(df) < RSI_PERIOD:
                 continue
 
             close_prices = df['Close']
             rsi = calculate_rsi(close_prices).iloc[-1]
-            price = close_prices.iloc[-1]
-            ma50 = close_prices.rolling(50).mean().iloc[-1]
-            ma200 = close_prices.rolling(200).mean().iloc[-1]
-            trend_pass = False
-            signal = None
 
-            # Determine signal with trend confirmation
-            if rsi < RSI_LOWER and price > ma200 and price > ma50:
-                signal = "Sell Put"
-                trend_pass = True
-            elif rsi > RSI_UPPER and price < ma200 and price < ma50:
-                signal = "Sell Call"
-                trend_pass = True
-            else:
-                signal = "Trend Conflict"
+            # Fetch market cap
+            info = stock.info
+            market_cap = info.get('marketCap', 0)
 
-            if not trend_pass:
-                continue  # skip mismatches
-
-            market_cap = stock.info.get('marketCap', 0)
-            if market_cap < MIN_MARKET_CAP:
-                continue
-
-            iv_estimate = fetch_iv_estimate(ticker)
-
-            matched.append({
-                "Ticker": ticker,
-                "RSI": round(rsi, 2),
-                "MA50": round(ma50, 2),
-                "MA200": round(ma200, 2),
-                "IV Estimate": iv_estimate if iv_estimate else "N/A",
-                "Market Cap (B)": round(market_cap / 1e9, 2),
-                "Signal": signal
-            })
-
-            time.sleep(1.7)
+            # Filter matches
+            if market_cap >= MIN_MARKET_CAP and (rsi > RSI_UPPER or rsi < RSI_LOWER):
+                matched.append({
+                    "Ticker": ticker,
+                    "RSI": round(rsi, 2),
+                    "Market Cap (B)": round(market_cap / 1e9, 2)
+                })
+            time.sleep(.5)
 
         except Exception as e:
             print(f"⚠️ Error with {ticker}: {e}")
 
+    # Output results
     if matched:
         df = pd.DataFrame(matched)
-        sell_puts = df[df["Signal"] == "Sell Put"].sort_values("RSI").reset_index(drop=True)
-        sell_calls = df[df["Signal"] == "Sell Call"].sort_values("RSI", ascending=False).reset_index(drop=True)
+        df['Type'] = df['RSI'].apply(lambda x: 'Oversold' if x < RSI_LOWER else 'Overbought')
+        oversold = df[df["Type"] == "Oversold"].sort_values("RSI").reset_index(drop=True)
+        overbought = df[df["Type"] == "Overbought"].sort_values("RSI", ascending=False).reset_index(drop=True)
 
-        max_len = max(len(sell_puts), len(sell_calls))
-        sell_puts = sell_puts.reindex(range(max_len))
-        sell_calls = sell_calls.reindex(range(max_len))
+        # Pad to equal length
+        max_len = max(len(oversold), len(overbought))
+        oversold = oversold.reindex(range(max_len))
+        overbought = overbought.reindex(range(max_len))
 
-        sell_puts = sell_puts[["Ticker", "RSI", "Market Cap (B)", "Signal"]].rename(columns=lambda x: x + " (Put)")
-        sell_calls = sell_calls[["Ticker", "RSI", "Market Cap (B)", "Signal"]].rename(columns=lambda x: x + " (Call)")
+        # Build combined output with spacer column
+        final = pd.concat([
+            oversold,
+            pd.DataFrame({'': [''] * max_len}),
+            overbought
+        ], axis=1)
 
-        spacer = pd.DataFrame({'': [''] * max_len})
-
-        final = pd.concat([sell_puts, spacer, sell_calls], axis=1)
-
-        # Save with consistent header
-        output_file = "scan_results_with_iv.csv"
+        output_file = "scan_results_clean.csv"
         final.to_csv(output_file, index=False)
         print(f"\n✅ Formatted results saved to {output_file}")
         print(final.dropna(how="all").to_string(index=False))
-        send_email_with_csv(output_file)
+
+        # Send email
+        send_email_with_csv(
+            filename=output_file,
+            sender_email=EMAIL_USER,
+            sender_password=EMAIL_PASS,
+            recipient_email=EMAIL_RECIPIENT
+        )
     else:
         print("No matching stocks found.")
 
@@ -150,3 +129,6 @@ def scan_stocks_individual(tickers):
 if __name__ == "__main__":
     tickers = fetch_all_tickers()
     scan_stocks_individual(tickers)
+
+
+
